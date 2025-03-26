@@ -6,7 +6,8 @@ from statsmodels.tsa.stattools import acf
 from statsmodels.tsa.seasonal import seasonal_decompose
 
 # CARREGAR E DIVIDIR DATAFRAMES
-df_total = pl.read_csv("C:\\Users\\BernardoAbibdeAlmeid\\Downloads\\dados_me607.csv")
+url = "https://raw.githubusercontent.com/abibernardo/modelagem_hierarquica_temporal/refs/heads/main/dados_me607.csv"
+df_total = pl.read_csv(url)
 df_total = df_total.sort("din_instante")
 regioes = df_total["nom_subsistema"].unique().to_list()
 
