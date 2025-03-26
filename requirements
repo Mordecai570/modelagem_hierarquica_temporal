@@ -1,0 +1,21 @@
+# Processamento de dados
+polars
+pandas
+numpy
+openpyxl  # Necessário para arquivos .xlsx
+xlrd      # Necessário para arquivos .xls
+
+# Modelagem estatística
+statsmodels
+scipy
+
+# Visualização de dados
+matplotlib
+seaborn
+plotly
+
+# Machine Learning
+scikit-learn
+
+# Interface com o usuário
+streamlit
