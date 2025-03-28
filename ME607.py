@@ -262,14 +262,14 @@ elif sec in "Decomposição Multiplicativa":
 elif sec in "Prophet":
     reg_pro = st.radio("Selecione uma região", ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"], key='radio pro', horizontal=True)
 
-# Aplicar Prophet em cada série
-if reg_pro in "Nordeste":
-    aplicar_prophet(df_nordeste, "Nordeste")
-if reg_pro in "Sul":
-    aplicar_prophet(df_sul, "Sul")
-if reg_pro in "Sudeste/Centro-oeste":
-    aplicar_prophet(df_sudeste_centroeste, "Sudeste/Centro-Oeste")
-if reg_pro in "Norte":
-    aplicar_prophet(df_norte, "Norte")
-if reg_pro in "Brasil":
-    aplicar_prophet(df_brasil, "Brasil")
+    # Aplicar Prophet em cada série
+    if reg_pro in "Nordeste":
+        aplicar_prophet(df_nordeste, "Nordeste")
+    if reg_pro in "Sul":
+        aplicar_prophet(df_sul, "Sul")
+    if reg_pro in "Sudeste/Centro-oeste":
+        aplicar_prophet(df_sudeste_centroeste, "Sudeste/Centro-Oeste")
+    if reg_pro in "Norte":
+        aplicar_prophet(df_norte, "Norte")
+    if reg_pro in "Brasil":
+        aplicar_prophet(df_brasil, "Brasil")
