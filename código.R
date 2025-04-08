@@ -3,7 +3,7 @@
 # ===============================
 pacotes <- c(
   "dplyr", "readr", "ggplot2", "plotly",
-  "forecast", "prophet", "ggfortify"
+  "forecast", "prophet", "ggfortify", "broom", "lubridate", "tsibble", "fable", "fabletools", "feasts"
 )
 
 # Instala os pacotes que ainda não estão instalados
@@ -68,48 +68,80 @@ serie_nordeste <- ts(df_nordeste$val_cargaenergiamwmed, frequency = 365)
 decomposicao <- decompose(serie_nordeste, type = "additive")
 autoplot(decomposicao)
 
+###################3 dcmp do trucios:
+df_nordeste <- dfs_regioes[["Nordeste"]]
+df_nordeste <- df_nordeste %>%
+  mutate(din_instante = as.Date(din_instante))
+serie_nordeste <- df_nordeste %>%
+  as_tsibble(index = din_instante)
+
+dcmp <- serie_nordeste |>    # passageiros é do tipo tsibble
+  model(decomposition = classical_decomposition(val_cargaenergiamwmed, type = "mult")) |>  
+  components() 
+
+serie_nordeste %>%   # passageiros é do tipo tsibble
+  model(classical_decomposition(val_cargaenergiamwmed, type = "multiplicative")) %>% 
+  components() %>%  # extraimos as componentes T_t, S_t e R_t
+  autoplot()
+
 
 # ===============================
 # 7. REGRESSÃO LINEAR
-  
---- USAR DUMMIES PARA ESTAÇÕES
---- USAR SAZONALIDADE E TENDÊNCIA
+# Certifique-se que a coluna de data está como Date
+df_nordeste <- dfs_regioes[["Nordeste"]]
+df_nordeste <- df_nordeste %>%
+  mutate(din_instante = as.Date(din_instante))
+
+serie_nordeste_tsbl <- df_nordeste %>%
+  as_tsibble(index = din_instante)
+
+
+
+modelo_tslm <- serie_nordeste_tsbl %>%
+  model(tslm = TSLM(val_cargaenergiamwmed ~ trend() + fourier(K = 2)))
+
+report(modelo_tslm)
+
+modelo_tslm %>% gg_tsresiduals()  ## HORROROSO
+
 
 # ===============================
 
 # ===============================
 # 8. SUAVIZAÇÃO EXPONENCIAL TRIPLA (HOLTS-WINTER)
+df_nordeste <- dfs_regioes[["Nordeste"]]
+df_nordeste <- df_nordeste %>%
+  mutate(din_instante = as_date(din_instante)) %>%
+  arrange(din_instante)  # garante ordem temporal
 
---- POIS HÁ SAZONALIDADE E TENDÊNCIA
+df_nordeste_tsbl <- df_nordeste %>%
+  as_tsibble(index = din_instante, regular = TRUE)
+
+# Ajusta o modelo ETS (Holt-Winters automático)
+modelo_ETS <- df_nordeste_tsbl %>%
+  model(HWA = ETS(val_cargaenergiamwmed ~ error("A") + trend("Ad") + season("A")),
+        HWM = ETS(val_cargaenergiamwmed ~ error("A") + trend("Ad") + season("A")))
+
+modelo_ETS %>% select(HWA) %>% report() # Holts-winter aditivo
+
+modelo_ETS %>% select(HWM) %>% gg_tsresiduals() ## residuos autocorrelacionados
+
+## HW_pred <- modelo_ETS %>% forecast(h = 60)
+
+## HW_pred |> autoplot(df_nordeste_tsbl) + geom_line(aes(y = .fitted, color = .model), data = augment(modelo_ETS)) 
+
+#########################
+
 
 # ===============================
 
 
 # 9. PREVISÃO COM PROPHET
 # ===============================
-df_prophet <- df_nordeste |>
-  rename(ds = din_instante, y = val_cargaenergiamwmed)
 
-m <- prophet(df_prophet)
-future <- make_future_dataframe(m, periods = 365)
-forecast <- predict(m, future)
 
-# Plot previsão
-plot_ly() |>
-  add_lines(x = df_prophet$ds, y = df_prophet$y, name = "Original") |>
-  add_lines(x = forecast$ds, y = forecast$yhat, name = "Previsão") |>
-  add_lines(x = forecast$ds, y = forecast$yhat_upper, name = "Limite Sup.", line = list(dash = "dot")) |>
-  add_lines(x = forecast$ds, y = forecast$yhat_lower, name = "Limite Inf.", line = list(dash = "dot")) |>
-  layout(title = "Previsão com Prophet - NORDESTE")
 
-# Tendência
-plot_ly(x = forecast$ds, y = forecast$trend, type = 'scatter', mode = 'lines', name = 'Tendência') |>
-  layout(title = "Tendência - NORDESTE")
 
-# Resíduos
-residuos <- df_prophet
-residuos$yhat <- forecast$yhat[1:nrow(residuos)]
-residuos$residuo <- residuos$y - residuos$yhat
 
-plot_ly(residuos, x = ~ds, y = ~residuo, type = 'scatter', mode = 'lines+markers') |>
-  layout(title = "Resíduos - NORDESTE")
+
+
