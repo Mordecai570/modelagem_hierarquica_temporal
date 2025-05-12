@@ -124,6 +124,20 @@ ajustar_tslm <- function(df_regiao, K = 2) {
   analisar_residuos(res, titulo = "TSLM")
 }
 
+# 2.5 Modelo SNAIVE
+ajustar_snaive <- function(df_regiao) {
+  df_ts <- df_regiao %>% mutate(din_instante = as.Date(din_instante)) %>%
+    arrange(din_instante) %>% as_tsibble(index = din_instante)
+  modelo <- df_ts %>% model(snaive = SNAIVE(val_cargaenergiamwmed ~ lag(7)))
+  print(report(modelo))
+  fc <- forecast(modelo, h = 30)
+  print(autoplot(fc, df_ts) + labs(title = "SNAIVE Previsão", y = "MW médios", x = "Data"))
+  # resíduos
+  res <- modelo %>% augment() %>% select(din_instante, .innov) %>%
+    rename(data = din_instante, residuo = .innov)
+  analisar_residuos(res, titulo = "SNAIVE")
+}
+
 # ===============================
 # 3. APLICAR FUNÇÕES EM CADA REGIÃO
 # ===============================
@@ -132,27 +146,32 @@ ajustar_sarima(df_nordeste)
 ajustar_prophet(df_nordeste)
 ajustar_ets(df_nordeste)
 ajustar_tslm(df_nordeste, K = 2)
+ajustar_snaive(df_nordeste)
 
 # Região Norte
 ajustar_sarima(df_norte)
 ajustar_prophet(df_norte)
 ajustar_ets(df_norte)
 ajustar_tslm(df_norte, K = 2)
+ajustar_snaive(df_norte)
 
 # Região Sul
 ajustar_sarima(df_sul)
 ajustar_prophet(df_sul)
 ajustar_ets(df_sul)
 ajustar_tslm(df_sul, K = 2)
+ajustar_snaive(df_sul)
 
 # Região Sudeste + Centro-Oeste
 ajustar_sarima(df_sudeste_centroeste)
 ajustar_prophet(df_sudeste_centroeste)
 ajustar_ets(df_sudeste_centroeste)
 ajustar_tslm(df_sudeste_centroeste, K = 2)
+ajustar_snaive(df_sudeste_centroeste)
 
 # Brasil (total)
 ajustar_sarima(df_brasil)
 ajustar_prophet(df_brasil)
 ajustar_ets(df_brasil)
 ajustar_tslm(df_brasil, K = 2)
+ajustar_snaive(df_brasil)
