@@ -2,6 +2,7 @@
 polars
 pandas
 numpy
+prophet
 openpyxl  # Necessário para arquivos .xlsx
 xlrd      # Necessário para arquivos .xls
 
