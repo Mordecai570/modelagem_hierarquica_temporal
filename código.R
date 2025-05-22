@@ -194,7 +194,7 @@ modelos_regionais <- df_hierarquia %>%
   model(sarima = ARIMA(val_cargaenergiamwmed))
 
 ##### 4.2 Ajustar modelos SARIMA para cada região Reconciliar com métodos hierárquicos (incluindo bottom-up)
-modelos_reconciliados <- modelos_regionais %>%
+sarima_hierarquico <- modelos_regionais %>%
   reconcile(
     bu        = bottom_up(sarima),
     ols       = min_trace(sarima, method = "ols"),
@@ -206,10 +206,10 @@ modelos_reconciliados <- modelos_regionais %>%
 ##### 4.3 Predição hierárquica
 
 
-# 1. (ex: bottom-up) (bu)
-previsao_brasil <- modelos_reconciliados %>%
+# (ex: bottom-up) (bu)
+previsao_hierarquica <- sarima_hierarquico %>%
   forecast(h = 120)  # ou ols, var, etc.
-previsao_brasil <- previsao_brasil %>%
+previsao_hierarquica <- previsao_hierarquica %>%
   filter(pais == "Brasil", nom_subsistema == "<aggregated>", .model == "bu")
 
 
@@ -217,60 +217,31 @@ previsao_brasil <- previsao_brasil %>%
 #### 5. COMPARAÇÃO MODELO DIRETO X MODELO HIERÁRQUICO
 # ===============================
 
-#### 5.1 Diretamente:
+#### 5.1 Ajustando o SARIMA para o total do Brasil diretamente:
+
 df_brasil_ts <- df_brasil %>%
   mutate(din_instante = as.Date(din_instante)) %>%
   as_tsibble(index = din_instante)
 
-sarima_brasil <- df_brasil_ts %>%
+sarima_direto <- df_brasil_ts %>%
   model(
     auto_sarima = ARIMA(val_cargaenergiamwmed)
   )
 
-# Análise de resíduos
-
-analisar_residuos <- function(residuos_df, titulo = "") {
-  p1 <- ggplot(residuos_df, aes(x = data, y = residuo)) +
-    geom_line() +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    labs(title = paste(titulo, "- Resíduos no tempo"),
-         x = "Data", y = "Resíduo")
-  
-  p2 <- ggplot(residuos_df, aes(x = residuo)) +
-    geom_histogram(bins = 30) +
-    labs(title = paste(titulo, "- Histograma dos resíduos"),
-         x = "Resíduo", y = "Frequência")
-  
-  p3 <- autoplot( Acf(residuos_df$residuo, plot = FALSE) ) +
-    labs(title = paste(titulo, "- ACF dos resíduos"))
-  
-  grid.arrange(p1, p2, p3, ncol = 1)
-}
-
-
-residuos_tsibble <- residuals(sarima_brasil)
-residuos_tsibble <- residuos_tsibble %>%
-  filter(.model == "auto_sarima")  # ou o nome que você deu no model()
-residuos_df <- residuos_tsibble %>%
-  as_tibble() %>%
-  select(data = din_instante, residuo = .resid)
-
-analisar_residuos(residuos_df, titulo = "SARIMA Brasil")
-
-################## Fazer a previsão direta para h = 120 dias
-previsao_direta <- sarima_brasil %>%
+previsao_direta <- sarima_direto %>%
   forecast(h = 120)
+
 
 ### 5.2 COMPARAÇÃO
 
 previsao_direta_df <- as.data.frame(previsao_direta)
-previsao_brasil_df <- as.data.frame(previsao_brasil)
+previsao_hierarquica_df <- as.data.frame(previsao_hierarquica)
 
 previsoes_comparadas <- bind_rows(
   previsao_direta_df %>%
     mutate(modelo = "Direto") %>%
     select(din_instante, .mean, modelo),
-  previsao_brasil_df %>%
+  previsao_hierarquica_df  %>%
     mutate(modelo = "Hierárquico") %>%
     select(din_instante, .mean, modelo)
 )
@@ -289,24 +260,4 @@ ggplot(previsoes_comparadas, aes(x = din_instante, y = .mean, color = modelo)) +
     plot.title = element_text(face = "bold", size = 14),
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
-
-
-
-#### Dados fora da amostra
-url2 <- "https://raw.githubusercontent.com/abibernardo/modelagem_hierarquica_temporal/main/CARGA_ENERGIA_2025%20(1).csv"
-df_novo <- readr::read_csv2(url2) |> arrange(din_instante)
-df_novo <- df_novo |> 
-  group_by(din_instante) |> 
-  summarise(val_cargaenergiamwmed = sum(val_cargaenergiamwmed), .groups = "drop")
-df_novo <- df_novo %>%
-  mutate(din_instante = as.Date(din_instante)) %>%
-  arrange(din_instante)
-df_novo <- df_novo[1:120, ]
-df_novo <- df_novo %>%
-  as_tsibble(index = din_instante)
- 
-
-
-accuracy(previsao_brasil, df_novo)
-accuracy(previsao_direta, df_novo)
 
