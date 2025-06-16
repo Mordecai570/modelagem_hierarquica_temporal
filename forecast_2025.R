@@ -82,10 +82,10 @@ modelo_brasil
 
 h <- 1
 num_rolling <- 90
-window_length <- 365
+window_length <- 730
 first_forecast_date <- as.Date("2025-01-01")
 
-rolling_sarima_nordeste <- function(df, h = 1, num_rolling = 90, window_length = 365) {
+rolling_sarima_nordeste <- function(df, h = 1, num_rolling = 90, window_length = 730) {
   # Série temporal como zoo
   inflation <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
   
@@ -119,7 +119,7 @@ rolling_sarima_nordeste <- function(df, h = 1, num_rolling = 90, window_length =
 }
 
 
-rolling_sarima_norte <- function(df, h = 1, num_rolling = 90, window_length = 365) {
+rolling_sarima_norte <- function(df, h = 1, num_rolling = 90, window_length = 730) {
   # Série temporal como zoo
   inflation <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
   
@@ -153,7 +153,7 @@ rolling_sarima_norte <- function(df, h = 1, num_rolling = 90, window_length = 36
 }
 
 
-rolling_sarima_sul <- function(df, h = 1, num_rolling = 90, window_length = 365) {
+rolling_sarima_sul <- function(df, h = 1, num_rolling = 90, window_length = 730) {
   # Série temporal como zoo
   inflation <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
   
@@ -200,6 +200,8 @@ prev_nordeste <- rolling_sarima_nordeste(df_nordeste)
 prev_norte <- rolling_sarima_norte(df_norte)
 prev_sul <- rolling_sarima_sul(df_sul)
 prev_sudeste_centroeste <- rolling_sarima_sul(df_sudeste_centroeste)
+prev_brasil_direto<- rolling_sarima_sul(df_brasil)
+
 
 previsoes_brasil <- Reduce(function(x, y) {
   merge(x, y, by = "forecast_date", all = TRUE)
@@ -245,3 +247,71 @@ ggplot(df_plot, aes(x = data, y = carga, color = tipo)) +
     color = ""
   ) +
   theme_minimal()
+
+
+#########
+url_dados_2025 <- "https://raw.githubusercontent.com/abibernardo/modelagem_hierarquica_temporal/main/CARGA_ENERGIA_2025%20(3).csv"
+
+df_2025 <- read_delim(
+  file = url_dados_2025,
+  delim = ";",
+  locale = locale(decimal_mark = ".")
+)
+
+df_2025 <- df_2025 %>%
+  mutate(
+    din_instante = as.Date(din_instante, format = "%Y-%m-%d")
+  )
+
+
+
+# 1. Agrupa os reais de 2025
+df_2025_real <- df_2025 %>%
+  group_by(din_instante) %>%
+  summarise(real = sum(val_cargaenergiamwmed), .groups = "drop")
+
+
+
+
+
+ggplot(df_comp_long, aes(x = forecast_date, y = previsao, color = metodo)) +
+  geom_line(size = 1) +
+  geom_line(aes(y = real), color = "black", linetype = "dashed", size = 0.8) +
+  labs(
+    title = "Real (tracejado) vs Previsões 2025",
+    subtitle = "SARIMA Direto vs Bottom‑Up",
+    x = "Data", y = "Carga (MW méd)",
+    color = "Método"
+  ) +
+  theme_minimal() +
+  expand_limits(y = 0)  # <-- força início no zero
+
+
+
+####################################################
+##################################################### PARA CADA REGIÃO
+
+# 1) Extrair reais para o Nordeste
+df_real_nordeste <- df_2025 %>%
+  filter(nom_subsistema == "Nordeste") %>%
+  select(data = din_instante, real = val_cargaenergiamwmed)
+
+# 2) Preparar previsões do Nordeste
+#    Supondo que prev_nordeste tem colunas: step, forecast_date, forecast_value_sarima
+df_prev_nordeste <- prev_nordeste %>%
+  select(data, previsao)
+
+# 3) Juntar séries
+df_plot_nordeste <- full_join(df_real_nordeste, df_prev_nordeste, by = "data")
+
+# 4) Plot
+ggplot(df_plot_nordeste, aes(x = data)) +
+  geom_line(aes(y = real,    color = "Real")) +
+  geom_line(aes(y = previsao, color = "Previsto"), linetype = "dashed") +
+  scale_color_manual("", values = c("Real" = "black", "Previsto" = "blue")) +
+  labs(
+    title = "Nordeste: Real vs Rolling‑SARIMA (2025)",
+    x = "Data", y = "Carga (MW méd)"
+  ) +
+  theme_minimal() +
+  expand_limits(y = 0)
