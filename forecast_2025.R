@@ -5,13 +5,15 @@ pacotes <- c(
   "dplyr", "tidyr", "readr", "ggplot2", "plotly",
   "forecast", "gridExtra", "prophet", "ggfortify", "broom", "lubridate", "tsibble", "fable", "fabletools", "feasts", "gridExtra"
 )
-# In
-stala pacotes faltantes
+# Instala pacotes faltantes
 pacotes_faltando <- pacotes[!(pacotes %in% installed.packages()[, "Package"])]
 if(length(pacotes_faltando)) install.packages(pacotes_faltando)
 
 # Carrega pacotes
 lapply(pacotes, library, character.only = TRUE)
+library(zoo)
+library(forecast)
+
 
 # ===============================
 # 1. CARREGAR DADOS
@@ -36,17 +38,54 @@ df_sul <- dfs_regioes[["Sul"]]
 df_sudeste_centroeste <- dfs_regioes[["Sudeste/Centro-Oeste"]]
 
 
-#library(zoo)
-library(forecast)
 
-### Forecast BOTTOM-UP "na mão" (somando as previsões de cada região para a previsão nacional)
+
+
+
+
+########## verificação de qual sarima é melhor: 
+
+# Função para ajustar auto.arima em uma série regional
+ajustar_auto_arima <- function(df) {
+  df <- df |> arrange(din_instante)
+  serie <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
+  ts_serie <- ts(as.numeric(serie), frequency = 7)  # frequência semanal
+  
+  modelo <- auto.arima(
+    ts_serie,
+    seasonal = TRUE,
+    stepwise = FALSE,         # busca exaustiva
+    approximation = FALSE,    # mais preciso (mais lento)
+    lambda = "auto"           # Box-Cox se necessário
+  )
+  
+  return(modelo)
+}
+
+# Aplicar para cada região
+modelo_nordeste <- ajustar_auto_arima(df_nordeste)
+modelo_norte <- ajustar_auto_arima(df_norte)
+modelo_sul <- ajustar_auto_arima(df_sul)
+modelo_sudeste_centroeste <- ajustar_auto_arima(df_sudeste_centroeste)
+modelo_brasil <- ajustar_auto_arima(df_brasil)
+
+# Exibir resultados
+modelo_nordeste
+modelo_norte
+modelo_sul
+modelo_sudeste_centroeste
+modelo_brasil
+
+
+### Fazendo previsão hierárquica
+
 
 h <- 1
 num_rolling <- 90
 window_length <- 365
 first_forecast_date <- as.Date("2025-01-01")
 
-rolling_sarima_future <- function(df, h = 1, num_rolling = 90, window_length = 365) {
+rolling_sarima_nordeste <- function(df, h = 1, num_rolling = 90, window_length = 365) {
   # Série temporal como zoo
   inflation <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
   
@@ -70,7 +109,7 @@ rolling_sarima_future <- function(df, h = 1, num_rolling = 90, window_length = 3
     
     train_ts <- ts(as.numeric(train_series), frequency = 7)
     
-    fit <- Arima(train_ts, order = c(1, 0, 0), seasonal = c(2, 1, 2))
+    fit <- Arima(train_ts, order = c(2, 0, 0), seasonal = c(0, 1, 1))
     fc <- forecast(fit, h = h)
     
     results$forecast_value_sarima[i] <- fc$mean[h]
@@ -79,10 +118,88 @@ rolling_sarima_future <- function(df, h = 1, num_rolling = 90, window_length = 3
   return(results)
 }
 
-prev_nordeste <- rolling_sarima_future(df_nordeste)
-prev_norte <- rolling_sarima_future(df_norte)
-prev_sul <- rolling_sarima_future(df_sul)
-prev_sudeste_centroeste <- rolling_sarima_future(df_sudeste_centroeste)
+
+rolling_sarima_norte <- function(df, h = 1, num_rolling = 90, window_length = 365) {
+  # Série temporal como zoo
+  inflation <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
+  
+  # Corrigido: garantir que seja Date
+  last_date <- as.Date(max(index(inflation)))
+  
+  results <- data.frame(
+    step = 1:num_rolling,
+    forecast_date = seq.Date(from = last_date + 1, by = "day", length.out = num_rolling),
+    forecast_value_sarima = NA_real_
+  )
+  
+  for (i in 1:num_rolling) {
+    # Janela de treino se move: termina em last_date - num_rolling + i
+    est_end_date <- last_date - num_rolling + i
+    est_start_date <- est_end_date - window_length + 1
+    
+    train_series <- window(inflation, start = est_start_date, end = est_end_date)
+    
+    if (length(train_series) < window_length) break
+    
+    train_ts <- ts(as.numeric(train_series), frequency = 7)
+    
+    fit <- Arima(train_ts, order = c(4, 0, 0), seasonal = c(0, 1, 1))
+    fc <- forecast(fit, h = h)
+    
+    results$forecast_value_sarima[i] <- fc$mean[h]
+  }
+  
+  return(results)
+}
+
+
+rolling_sarima_sul <- function(df, h = 1, num_rolling = 90, window_length = 365) {
+  # Série temporal como zoo
+  inflation <- zoo(df$val_cargaenergiamwmed, order.by = df$din_instante)
+  
+  # Corrigido: garantir que seja Date
+  last_date <- as.Date(max(index(inflation)))
+  
+  results <- data.frame(
+    step = 1:num_rolling,
+    forecast_date = seq.Date(from = last_date + 1, by = "day", length.out = num_rolling),
+    forecast_value_sarima = NA_real_
+  )
+  
+  for (i in 1:num_rolling) {
+    # Janela de treino se move: termina em last_date - num_rolling + i
+    est_end_date <- last_date - num_rolling + i
+    est_start_date <- est_end_date - window_length + 1
+    
+    train_series <- window(inflation, start = est_start_date, end = est_end_date)
+    
+    if (length(train_series) < window_length) break
+    
+    train_ts <- ts(as.numeric(train_series), frequency = 7)
+    
+    fit <- Arima(train_ts, order = c(0, 0, 4), seasonal = c(0, 1, 1))
+    fc <- forecast(fit, h = h)
+    
+    results$forecast_value_sarima[i] <- fc$mean[h]
+  }
+  
+  return(results)
+}
+
+
+
+
+
+
+
+
+
+
+
+prev_nordeste <- rolling_sarima_nordeste(df_nordeste)
+prev_norte <- rolling_sarima_norte(df_norte)
+prev_sul <- rolling_sarima_sul(df_sul)
+prev_sudeste_centroeste <- rolling_sarima_sul(df_sudeste_centroeste)
 
 previsoes_brasil <- Reduce(function(x, y) {
   merge(x, y, by = "forecast_date", all = TRUE)
@@ -120,13 +237,11 @@ dados_prev <- previsoes_brasil %>%
 # 3. Juntar tudo
 df_plot <- bind_rows(dados_obs, dados_prev)
 
-# 4. Gráfico
 ggplot(df_plot, aes(x = data, y = carga, color = tipo)) +
   geom_line(size = 1) +
   labs(
-    title = "Carga de Energia no Brasil — Observado (2024) vs Previsto (2025)",
+    title = "Observado (2024) vs Previsto (2025)",
     x = "Data", y = "Carga (MW méd)",
-    color = "Tipo"
+    color = ""
   ) +
-  theme_minimal() +
-  scale_color_manual(values = c("Observado" = "black", "Previsto" = "blue"))
+  theme_minimal()
