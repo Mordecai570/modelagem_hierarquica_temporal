@@ -5,6 +5,9 @@ import streamlit as st
 from statsmodels.tsa.stattools import acf
 from statsmodels.tsa.seasonal import seasonal_decompose
 from prophet import Prophet
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import pandas as pd
+
 
 # CARREGAR E DIVIDIR DATAFRAMES
 url = "https://raw.githubusercontent.com/abibernardo/modelagem_hierarquica_temporal/refs/heads/main/dados_me607.csv"
@@ -205,7 +208,7 @@ def aplicar_prophet(df, titulo):
 
 sec = st.sidebar.selectbox(
     " ",
-    ("Objetivo", "Análise Exploratória", "Decomposição Multiplicativa", "Prophet"))
+    ("Objetivo", "Análise Exploratória", "SNAIVE", "TSLM", "Prophet", "Holts-Winter", "Sarima", "Modelo Hierárquico"))
 
 
 if sec in "Objetivo":
@@ -243,7 +246,7 @@ elif sec in "Análise Exploratória":
 
 
 
-elif sec in "Decomposição Multiplicativa":
+"""elif sec in "Decomposição Multiplicativa":
     reg_decomp = st.radio("Selecione uma região", ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"], horizontal=True)
     st.divider()
     if reg_decomp in "Norte":
@@ -257,9 +260,9 @@ elif sec in "Decomposição Multiplicativa":
 
     elif reg_decomp in "Sul":
         decompor_e_plotar(df_sul)
+"""
 
-
-elif sec in "Prophet":
+"""elif sec in "Prophet":
     reg_pro = st.radio("Selecione uma região", ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"], key='radio pro', horizontal=True)
 
     # Aplicar Prophet em cada série
@@ -273,3 +276,83 @@ elif sec in "Prophet":
         aplicar_prophet(df_norte, "Norte")
     if reg_pro in "Brasil":
         aplicar_prophet(df_brasil, "Brasil")
+"""
+
+if sec == "Sarima":
+    st.title("Modelagem SARIMA Básica por Região")
+
+    # 1️⃣ Seleção de região
+    reg_sarima = st.radio(
+        "Selecione uma região",
+        ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"],
+        horizontal=True
+    )
+
+    # 2️⃣ Carrega e prepara a série
+    df_sel = {
+        "Norte": df_norte,
+        "Nordeste": df_nordeste,
+        "Sudeste/Centro-oeste": df_sudeste_centroeste,
+        "Sul": df_sul
+    }[reg_sarima].copy()
+
+    df_sel["din_instante"] = pd.to_datetime(df_sel["din_instante"])
+    df_sel.set_index("din_instante", inplace=True)
+    # garante frequência diária e preenche eventuais gaps
+    serie = df_sel["val_cargaenergiamwmed"].asfreq("D").ffill()
+
+    try:
+        # 3️⃣ Ajuste do SARIMA(1,1,1)(1,1,1)[365]
+        modelo = SARIMAX(
+            serie,
+            order=(1, 1, 1),
+            seasonal_order=(1, 1, 1, 365),
+            enforce_stationarity=False,
+            enforce_invertibility=False
+        )
+        resultado = modelo.fit(disp=False)
+
+        # 4️⃣ Plot do ajuste in-sample
+        pred = resultado.get_prediction(start=0, end=len(serie) - 1)
+        pred_mean = pred.predicted_mean
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=serie.index, y=serie.values,
+            mode="lines", name="Observado"
+        ))
+        fig.add_trace(go.Scatter(
+            x=serie.index, y=pred_mean,
+            mode="lines", name="Ajustado", line=dict(color="red")
+        ))
+        fig.update_layout(
+            title=f"SARIMA(1,1,1)(1,1,1)[365] - {reg_sarima}",
+            xaxis_title="Data", yaxis_title="Carga Energética",
+            template="plotly_white"
+        )
+        st.plotly_chart(fig)
+
+        # 5️⃣ Critérios de informação
+        st.markdown(f"**AIC:** {resultado.aic:.2f}  \n**BIC:** {resultado.bic:.2f}")
+
+        # 6️⃣ Diagnóstico de resíduos
+        resid = resultado.resid
+        fig_res = go.Figure()
+        fig_res.add_trace(go.Scatter(
+            x=serie.index, y=resid,
+            mode="lines", name="Resíduos"
+        ))
+        fig_res.add_trace(go.Scatter(
+            x=serie.index, y=[0] * len(resid),
+            mode="lines", name="Linha Zero",
+            line=dict(dash="dot", color="gray")
+        ))
+        fig_res.update_layout(
+            title="Resíduos do Modelo",
+            xaxis_title="Data", yaxis_title="Erro",
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_res)
+
+    except Exception as e:
+        st.error(f"Erro ao ajustar modelo SARIMA: {e}")
