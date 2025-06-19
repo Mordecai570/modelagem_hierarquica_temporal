@@ -312,47 +312,5 @@ if sec == "Sarima":
         )
         resultado = modelo.fit(disp=False)
 
-        # 4️⃣ Plot do ajuste in-sample
-        pred = resultado.get_prediction(start=0, end=len(serie) - 1)
-        pred_mean = pred.predicted_mean
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=serie.index, y=serie.values,
-            mode="lines", name="Observado"
-        ))
-        fig.add_trace(go.Scatter(
-            x=serie.index, y=pred_mean,
-            mode="lines", name="Ajustado", line=dict(color="red")
-        ))
-        fig.update_layout(
-            title=f"SARIMA(1,1,1)(1,1,1)[365] - {reg_sarima}",
-            xaxis_title="Data", yaxis_title="Carga Energética",
-            template="plotly_white"
-        )
-        st.plotly_chart(fig)
-
-        # 5️⃣ Critérios de informação
-        st.markdown(f"**AIC:** {resultado.aic:.2f}  \n**BIC:** {resultado.bic:.2f}")
-
-        # 6️⃣ Diagnóstico de resíduos
-        resid = resultado.resid
-        fig_res = go.Figure()
-        fig_res.add_trace(go.Scatter(
-            x=serie.index, y=resid,
-            mode="lines", name="Resíduos"
-        ))
-        fig_res.add_trace(go.Scatter(
-            x=serie.index, y=[0] * len(resid),
-            mode="lines", name="Linha Zero",
-            line=dict(dash="dot", color="gray")
-        ))
-        fig_res.update_layout(
-            title="Resíduos do Modelo",
-            xaxis_title="Data", yaxis_title="Erro",
-            template="plotly_white"
-        )
-        st.plotly_chart(fig_res)
-
     except Exception as e:
         st.error(f"Erro ao ajustar modelo SARIMA: {e}")
