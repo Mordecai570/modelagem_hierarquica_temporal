@@ -2,7 +2,7 @@
 # PACOTES
 # ===============================
 pacotes <- c(
-  "dplyr", "tidyr", "readr", "ggplot2", "plotly",
+  "dplyr", "Metrics", "tidyr", "readr", "ggplot2", "plotly",
   "forecast", "gridExtra", "prophet", "ggfortify", "broom", "lubridate", "tsibble", "fable", "fabletools", "feasts", "gridExtra"
 )
 # Instala pacotes faltantes
@@ -271,23 +271,69 @@ df_2025_real <- df_2025 %>%
   summarise(real = sum(val_cargaenergiamwmed), .groups = "drop")
 
 
+# 1. Previsões SARIMA Direto
+df_sarima_direto <- prev_brasil_direto %>%
+  select(forecast_date, previsao = forecast_value_sarima) %>%
+  mutate(metodo = "SARIMA Direto")
+
+# 2. Previsões Bottom-Up
+df_sarima_bottomup <- previsoes_brasil %>%
+  select(forecast_date, previsao = forecast_value_total) %>%
+  mutate(metodo = "SARIMA Bottom-Up")
+
+# 3. Juntar previsões
+df_comp_long <- bind_rows(df_sarima_direto, df_sarima_bottomup) %>%
+  left_join(df_2025_real, by = c("forecast_date" = "din_instante"))
+
 
 
 
 ggplot(df_comp_long, aes(x = forecast_date, y = previsao, color = metodo)) +
-  geom_line(size = 1) +
-  geom_line(aes(y = real), color = "black", linetype = "dashed", size = 0.8) +
+  geom_line(linewidth = 0.9, alpha = 0.9) +
+  geom_line(aes(y = real), color = "black", linetype = "dashed", linewidth = 0.8) +
   labs(
-    title = "Real (tracejado) vs Previsões 2025",
-    subtitle = "SARIMA Direto vs Bottom‑Up",
-    x = "Data", y = "Carga (MW méd)",
+    title = "Previsões do Consumo de Energia em 2025 vs Observado",
+    subtitle = "Comparação entre SARIMA Direto e SARIMA Bottom-Up",
+    x = "Data", y = "Carga de Energia (MW méd)",
     color = "Método"
   ) +
-  theme_minimal() +
-  expand_limits(y = 0)  # <-- força início no zero
+  scale_color_manual(values = c(
+    "SARIMA Direto" = "#1f77b4",        # azul
+    "SARIMA Bottom-Up" = "#ff7f0e"      # laranja
+  )) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 10),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom"
+  ) +
+  expand_limits(y = 0)
 
 
 
+library(dplyr)
+library(Metrics)
+
+# Supondo que df_comp_long já existe e tem colunas:
+#   forecast_date, previsao, metodo, real
+
+# Filtra apenas observações com valor real disponível
+df_erros <- df_comp_long %>%
+  filter(!is.na(real)) %>%
+  group_by(metodo) %>%
+  summarise(
+    RMSE = rmse(real, previsao),
+    MAE  = mae(real, previsao),
+    MAPE = mape(real, previsao),
+    .groups = "drop"
+  )
+
+# Exibe o resultado
+print(df_erros)
 ####################################################
 ##################################################### PARA CADA REGIÃO
 
@@ -305,13 +351,5 @@ df_prev_nordeste <- prev_nordeste %>%
 df_plot_nordeste <- full_join(df_real_nordeste, df_prev_nordeste, by = "data")
 
 # 4) Plot
-ggplot(df_plot_nordeste, aes(x = data)) +
-  geom_line(aes(y = real,    color = "Real")) +
-  geom_line(aes(y = previsao, color = "Previsto"), linetype = "dashed") +
-  scale_color_manual("", values = c("Real" = "black", "Previsto" = "blue")) +
-  labs(
-    title = "Nordeste: Real vs Rolling‑SARIMA (2025)",
-    x = "Data", y = "Carga (MW méd)"
-  ) +
-  theme_minimal() +
-  expand_limits(y = 0)
+ggplot(df_comp_long, aes(x = forecast_date, y = previsao, color = metodo)) +
+  geom_line(linewidth = 0.9, alpha = 0.9) +
