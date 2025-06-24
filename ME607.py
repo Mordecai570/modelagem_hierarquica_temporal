@@ -7,6 +7,20 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 from prophet import Prophet
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 import pandas as pd
+from statsmodels.tsa.stattools import acf
+import plotly.graph_objects as go
+import numpy as np
+from statsmodels.tsa.stattools import pacf
+import polars as pl
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+from statsmodels.tsa.stattools import acf
+from statsmodels.tsa.seasonal import seasonal_decompose
+from prophet import Prophet
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from datetime import timedelta
+import pandas as pd
 
 
 # CARREGAR E DIVIDIR DATAFRAMES
@@ -111,104 +125,88 @@ def correlogramas(df):
 
 FREQ = 365  # Ajuste conforme PERÍODO
 
-# Função para decompor e plotar a série temporal
-def decompor_e_plotar(df):
 
-    # Definir índice temporal
-    df.set_index("din_instante", inplace=True)
+def rolling_sarima_forecast(df, date_col, value_col,
+                            order, seasonal_order,
+                            h=1, num_rolling=90, window_length=730, freq="D"):
+    df = df[[date_col, value_col]].copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values(date_col).set_index(date_col).asfreq(freq)
 
-    # Aplicar decomposição clássica
-    decomposed = seasonal_decompose(df["val_cargaenergiamwmed"], model="multiplicative", period=FREQ)
+    last_date = df.index.max()
+    results = {"forecast_date": [], "forecast_value": []}
 
-    # --- Gráfico de linha
-    fig_original = go.Figure()
-    fig_original.add_trace(
-        go.Scatter(x=df.index, y=df["val_cargaenergiamwmed"], mode="lines", name="Série Original"))
-    fig_original.update_layout(title=f"Série Temporal", xaxis_title="Data", yaxis_title="Consumo de Energia",
-                               template="plotly_white")
+    # janela móvel: o primeiro end_train termina em last_date - (num_rolling-1)
+    for i in range(num_rolling):
+        end_train = last_date - timedelta(days=(num_rolling - 1 - i))
+        start_train = end_train - timedelta(days=window_length - 1)
+        train = df.loc[start_train:end_train, value_col]
 
-    # --- 1️⃣ Gráfico da Tendência ---
-    fig_tendencia = go.Figure()
-    fig_tendencia.add_trace(go.Scatter(x=df.index, y=decomposed.trend, mode="lines", name="Tendência"))
-    fig_tendencia.update_layout(title=f"Tendência", xaxis_title="Data", yaxis_title="Tendência",
-                                template="plotly_white")
+        # data que será prevista
+        fc_date = end_train + timedelta(days=h)
 
-    # --- 2️⃣ Gráfico da Sazonalidade ---
-    fig_sazonalidade = go.Figure()
-    fig_sazonalidade.add_trace(go.Scatter(x=df.index, y=decomposed.seasonal, mode="lines", name="Sazonalidade"))
-    fig_sazonalidade.update_layout(title=f"Sazonalidade", xaxis_title="Data", yaxis_title="Sazonalidade",
-                                   template="plotly_white")
+        if len(train) < window_length:
+            results["forecast_date"].append(fc_date)
+            results["forecast_value"].append(np.nan)
+            continue
 
-    # --- 3️⃣ Gráfico do Resíduo ---
-    fig_residuo = go.Figure()
-    fig_residuo.add_trace(go.Scatter(x=df.index, y=decomposed.resid, mode="lines", name="Resíduo"))
-    fig_residuo.update_layout(title=f"Resíduo", xaxis_title="Data", yaxis_title="Resíduo",
-                              template="plotly_white")
+        try:
+            model = SARIMAX(train,
+                            order=order,
+                            seasonal_order=seasonal_order,
+                            enforce_stationarity=False,
+                            enforce_invertibility=False)
+            res = model.fit(disp=False)
+            fc = res.forecast(steps=h)
+            results["forecast_date"].append(fc_date)
+            results["forecast_value"].append(fc.iloc[-1])
+        except:
+            results["forecast_date"].append(fc_date)
+            results["forecast_value"].append(np.nan)
 
-    # Exibir os gráficos
-    st.plotly_chart(fig_original)
+    return pd.DataFrame(results)
 
-    st.plotly_chart(fig_tendencia)
 
-    st.plotly_chart(fig_sazonalidade)
+# --- Função para plotar SARIMA vs Real ---
+def plot_forecast_vs_observed(df_forecast, df_real,
+                              date_col="forecast_date",
+                              forecast_col="forecast_value",
+                              real_col="real"):
+    df = df_forecast.copy()
+    df = df.merge(df_real, left_on=date_col, right_on="din_instante", how="left")
 
-    st.plotly_chart(fig_residuo)
-
-### PROPHET
-def aplicar_prophet(df, titulo):
-    # Converter para Pandas e formatar para o Prophet
-    df_pd = df
-    df_pd = df_pd.rename(columns={"din_instante": "ds", "val_cargaenergiamwmed": "y"})
-
-    # Criar e ajustar o modelo
-    model = Prophet(yearly_seasonality=True, daily_seasonality=False, weekly_seasonality=False)
-    model.fit(df_pd)
-
-    # Criar previsões para os próximos 365 dias
-    future = model.make_future_dataframe(periods=365)
-    forecast = model.predict(future)
-
-    # --- 1️⃣ Gráfico da Previsão ---
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_pd["ds"], y=df_pd["y"], mode="lines", name="Série Original"))
-    fig.add_trace(go.Scatter(x=forecast["ds"], y=forecast["yhat"], mode="lines", name="Previsão", line=dict(color="red")))
-    fig.add_trace(go.Scatter(x=forecast["ds"], y=forecast["yhat_upper"], mode="lines", name="Limite Superior", line=dict(dash="dot", color="gray")))
-    fig.add_trace(go.Scatter(x=forecast["ds"], y=forecast["yhat_lower"], mode="lines", name="Limite Inferior", line=dict(dash="dot", color="gray")))
-    fig.update_layout(title=f"Previsão - {titulo}", xaxis_title="Data", yaxis_title="Consumo de Energia", template="plotly_white")
-    st.plotly_chart(fig)
 
-    # --- 2️⃣ Componentes da Série ---
-    fig_comp = go.Figure()
-    fig_comp.add_trace(go.Scatter(x=forecast["ds"], y=forecast["trend"], mode="lines", name="Tendência", line=dict(color="blue")))
-    fig_comp.update_layout(title=f"Tendência da Série - {titulo}", xaxis_title="Data", yaxis_title="Tendência", template="plotly_white")
-    st.plotly_chart(fig_comp)
+    fig.add_trace(go.Scatter(
+        x=df[date_col],
+        y=df[forecast_col],
+        mode="lines",
+        name="Previsão SARIMA",
+        line=dict(color="orange")
+    ))
 
-    # --- 3️⃣ Resíduos ---
-    df_residuos = df_pd.copy()
-    df_residuos["yhat"] = forecast["yhat"][: len(df_pd)]
-    df_residuos["residuo"] = df_residuos["y"] - df_residuos["yhat"]
+    fig.add_trace(go.Scatter(
+        x=df[date_col],
+        y=df[real_col],
+        mode="lines",
+        name="Valor Real",
+        line=dict(color="black", dash="dash")
+    ))
 
-    # Resíduos ao longo do tempo
-    fig_res = go.Figure()
-    fig_res.add_trace(go.Scatter(x=df_residuos["ds"], y=df_residuos["residuo"], mode="lines+markers", name="Resíduos"))
-    fig_res.add_trace(go.Scatter(x=df_residuos["ds"], y=[0] * len(df_residuos), mode="lines", name="Linha Zero", line=dict(dash="dot", color="red")))
-    fig_res.update_layout(title=f"Resíduos ao Longo do Tempo - {titulo}", xaxis_title="Data", yaxis_title="Erro (y - yhat)", template="plotly_white")
-    st.plotly_chart(fig_res)
+    fig.update_layout(
+        title="SARIMA - Previsão vs Real",
+        xaxis_title="Data",
+        yaxis_title="Carga de Energia (MWméd)",
+        template="plotly_white",
+        legend=dict(orientation="h", y=-0.2)
+    )
 
-    # --- 4️⃣ Sazonalidade Anual ---
-    fig_seasonality = go.Figure()
-    fig_seasonality.add_trace(
-        go.Scatter(x=forecast["ds"], y=forecast["yearly"], mode="lines", name="Sazonalidade Anual",
-                   line=dict(color="green")))
-    fig_seasonality.update_layout(title=f"Sazonalidade Anual - {titulo}", xaxis_title="Data",
-                                  yaxis_title="Variação Anual", template="plotly_white")
-    st.plotly_chart(fig_seasonality)
+    return fig
 
-### Montagem de tela
 
 sec = st.sidebar.selectbox(
     " ",
-    ("Objetivo", "Análise Exploratória", "SNAIVE", "TSLM", "Prophet", "Holts-Winter", "Sarima", "Modelo Hierárquico"))
+    ("Objetivo", "Análise Exploratória", "Modelo por Região", "Modelo Hierárquico"))
 
 
 if sec in "Objetivo":
@@ -246,71 +244,251 @@ elif sec in "Análise Exploratória":
 
 
 
-"""elif sec in "Decomposição Multiplicativa":
-    reg_decomp = st.radio("Selecione uma região", ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"], horizontal=True)
-    st.divider()
-    if reg_decomp in "Norte":
-        decompor_e_plotar(df_norte)
-
-    elif reg_decomp in "Nordeste":
-        decompor_e_plotar(df_nordeste)
-
-    elif reg_decomp in "Sudeste/Centro-oeste":
-        decompor_e_plotar(df_sudeste_centroeste)
-
-    elif reg_decomp in "Sul":
-        decompor_e_plotar(df_sul)
-"""
-
-"""elif sec in "Prophet":
-    reg_pro = st.radio("Selecione uma região", ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"], key='radio pro', horizontal=True)
-
-    # Aplicar Prophet em cada série
-    if reg_pro in "Nordeste":
-        aplicar_prophet(df_nordeste, "Nordeste")
-    if reg_pro in "Sul":
-        aplicar_prophet(df_sul, "Sul")
-    if reg_pro in "Sudeste/Centro-oeste":
-        aplicar_prophet(df_sudeste_centroeste, "Sudeste/Centro-Oeste")
-    if reg_pro in "Norte":
-        aplicar_prophet(df_norte, "Norte")
-    if reg_pro in "Brasil":
-        aplicar_prophet(df_brasil, "Brasil")
-"""
-
-if sec == "Sarima":
-    st.title("Modelagem SARIMA Básica por Região")
+if sec == "Modelo por Região":
+    st.title("SARIMA por Região")
 
     # 1️⃣ Seleção de região
     reg_sarima = st.radio(
         "Selecione uma região",
-        ["Norte", "Nordeste", "Sudeste/Centro-oeste", "Sul"],
+        ["Norte", "Nordeste", "Sudeste/Centro-Oeste", "Sul"],
         horizontal=True
     )
-
+    st.divider()
     # 2️⃣ Carrega e prepara a série
     df_sel = {
         "Norte": df_norte,
         "Nordeste": df_nordeste,
-        "Sudeste/Centro-oeste": df_sudeste_centroeste,
+        "Sudeste/Centro-Oeste": df_sudeste_centroeste,
         "Sul": df_sul
     }[reg_sarima].copy()
 
     df_sel["din_instante"] = pd.to_datetime(df_sel["din_instante"])
     df_sel.set_index("din_instante", inplace=True)
-    # garante frequência diária e preenche eventuais gaps
-    serie = df_sel["val_cargaenergiamwmed"].asfreq("D").ffill()
+    df_sel = df_sel.asfreq("D")
 
-    try:
-        # 3️⃣ Ajuste do SARIMA(1,1,1)(1,1,1)[365]
-        modelo = SARIMAX(
-            serie,
-            order=(1, 1, 1),
-            seasonal_order=(1, 1, 1, 365),
-            enforce_stationarity=False,
-            enforce_invertibility=False
+    serie = df_sel["val_cargaenergiamwmed"]
+    analise = st.selectbox(" ", ["Critérios de informação", "Resíduos", "Previsão"])
+    st.divider()
+    if analise not in "Previsão":
+        if reg_sarima in "Sul" or reg_sarima in "Sudeste/Centro-Oeste":
+            st.write("**Recomendação: ARIMA(0,0,4)(0,1,1)[7]**")
+        elif reg_sarima in "Nordeste":
+            st.write("**Recomendação: ARIMA(2,0,0)(0,1,1)[7]**")
+        elif reg_sarima in "Norte":
+            st.write("**Recomendação: ARIMA(4,0,0)(0,1,1)[7]**")
+        st.divider()
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            p = st.number_input("p (AR)", min_value=0, max_value=10, value=1, step=1)
+            p1 = st.number_input("P (SAR)", min_value=0, max_value=10, value=0, step=1)
+        with col2:
+            d = st.number_input("d (diferença)", min_value=0, max_value=5, value=0, step=1)
+            d1 = st.number_input("D (sazonal)", min_value=0, max_value=5, value=1, step=1)
+        with col3:
+            q = st.number_input("q (MA)", min_value=0, max_value=10, value=0, step=1)
+            q1 = st.number_input("Q (SMA)", min_value=0, max_value=10, value=1, step=1)
+        st.divider()
+        try:
+            # 3️⃣ Ajuste do SARIMA(2,0,0)(0,1,1)[7]
+            modelo = SARIMAX(
+                serie,
+                order=(p, d, q),
+                seasonal_order=(p1, d1, q1, 7),
+                enforce_stationarity=False,
+                enforce_invertibility=False,
+                simple_differencing=True
+            )
+            resultado = modelo.fit(disp=False)
+
+            if analise in "Critérios de informação":
+
+                aic = resultado.aic
+                bic = resultado.bic
+                k = resultado.params.shape[0]  # número de parâmetros
+                n = int(resultado.nobs)  # número de observações
+                aicc = aic + (2 * k * (k + 1)) / (n - k - 1)
+
+                col1, col2, col3 = st.columns(3)
+
+                col1.metric(label="AIC", value=f"{aic:.2f}")
+                col2.metric(label="BIC", value=f"{bic:.2f}")
+                col3.metric(label="AICc", value=f"{aicc:.2f}")
+
+            if analise in "Resíduos":
+
+                residuos = resultado.resid
+                fig_resid = px.line(x=residuos.index, y=residuos, title="Resíduos ao longo do tempo")
+                fig_resid.update_layout(
+                    xaxis_title="Data",
+                    yaxis_title="Resíduo",
+                    template="plotly_white"
+                )
+                fig_resid.add_shape(type="line", x0=residuos.index.min(), x1=residuos.index.max(),
+                                    y0=0, y1=0, line=dict(color="gray", dash="dash"))
+                st.subheader("Resíduos no tempo")
+                st.plotly_chart(fig_resid)
+
+                lags = 40
+                acf_vals = acf(residuos, nlags=lags)
+                conf_int = 1.96 / np.sqrt(len(residuos))
+
+                fig_acf = go.Figure()
+                fig_acf.add_trace(go.Bar(x=list(range(lags + 1)), y=acf_vals, name="ACF", marker_color="indianred"))
+                fig_acf.add_trace(go.Scatter(x=list(range(lags + 1)), y=[conf_int] * (lags + 1), line=dict(dash="dot", color="gray")))
+                fig_acf.add_trace(go.Scatter(x=list(range(lags + 1)), y=[-conf_int] * (lags + 1), line=dict(dash="dot", color="gray")))
+                fig_acf.update_layout(title="Autocorrelação dos Resíduos (ACF)", xaxis_title="Defasagem (Lag)", yaxis_title="Autocorrelação", template="plotly_white", showlegend=False)
+                st.subheader("ACF dos Resíduos")
+                st.plotly_chart(fig_acf)
+
+                pacf_vals = pacf(residuos, nlags=lags)
+                fig_pacf = go.Figure()
+                fig_pacf.add_trace(go.Bar(x=list(range(lags + 1)), y=pacf_vals, name="PACF", marker_color="steelblue"))
+                fig_pacf.add_trace(go.Scatter(x=list(range(lags + 1)), y=[conf_int] * (lags + 1), line=dict(dash="dot", color="gray")))
+                fig_pacf.add_trace(go.Scatter(x=list(range(lags + 1)), y=[-conf_int] * (lags + 1), line=dict(dash="dot", color="gray")))
+                fig_pacf.update_layout(title="Autocorrelação Parcial dos Resíduos (PACF)", xaxis_title="Defasagem (Lag)", yaxis_title="PACF", template="plotly_white", showlegend=False)
+                st.subheader("PACF dos Resíduos")
+                st.plotly_chart(fig_pacf)
+
+
+
+        except Exception as e:
+            st.error(f"Erro ao ajustar modelo SARIMA: {e}")
+
+    else:
+        # 1️⃣ Carrega previsões prontas do GitHub
+        url_fc = (
+            "https://raw.githubusercontent.com/"
+            "abibernardo/modelagem_hierarquica_temporal/"
+            "main/previsoes_brasil.csv"
         )
-        resultado = modelo.fit(disp=False)
+        df_fc = pd.read_csv(url_fc, parse_dates=["forecast_date"])
 
-    except Exception as e:
-        st.error(f"Erro ao ajustar modelo SARIMA: {e}")
+        # 2️⃣ Mapeia coluna de previsão para cada região
+        col_map = {
+            "Norte": "sarima_norte",
+            "Nordeste": "sarima_nordeste",
+            "Sul": "sarima_sul",
+            "Sudeste/Centro-Oeste": "sarima_sudeste_centroeste"
+        }
+        col_fc = col_map[reg_sarima]
+
+        df_pred = df_fc[["forecast_date", col_fc]].rename(columns={col_fc: "forecast"})
+
+        # 3️⃣ Carrega dados reais de 2025 do GitHub
+        url_real = (
+            "https://raw.githubusercontent.com/abibernardo/"
+            "modelagem_hierarquica_temporal/main/"
+            "CARGA_ENERGIA_2025%20(3).csv"
+        )
+        df_real = (
+            pd.read_csv(url_real, sep=";", decimal=".")
+                .assign(date=lambda d: pd.to_datetime(d["din_instante"]))
+                .query("nom_subsistema == @reg_sarima")
+                .groupby("date", as_index=False)["val_cargaenergiamwmed"]
+                .sum()
+                .rename(columns={"val_cargaenergiamwmed": "real"})
+        )
+
+        # 4️⃣ Faz merge só por data
+        df_plot = pd.merge(
+            df_pred,
+            df_real,
+            left_on="forecast_date",
+            right_on="date",
+            how="inner"
+        )
+
+        # 5️⃣ Desenha o gráfico
+        fig = go.Figure([
+            go.Scatter(
+                x=df_plot["forecast_date"], y=df_plot["forecast"],
+                mode="lines", name="Predito", line=dict(color="orange")
+            ),
+            go.Scatter(
+                x=df_plot["forecast_date"], y=df_plot["real"],
+                mode="lines", name="Real", line=dict(color="black", dash="dash")
+            )
+        ])
+        fig.update_layout(
+            title=f"{reg_sarima} — Previsão SARIMA vs Observado 2025",
+            xaxis_title="Data",
+            yaxis_title="Carga (MW méd)",
+            template="plotly_white",
+            legend=dict(orientation="h", y=-0.2)
+        )
+        fig.update_yaxes(rangemode="tozero")
+
+        st.plotly_chart(fig, use_container_width=True)
+
+if sec in "Modelo Hierárquico":
+    st.title("Modelo Hierárquico: Bottom-Up")
+
+    # 1️⃣ Multiselect para regiões
+    regioes = ["Norte", "Nordeste", "Sul", "Sudeste/Centro-oeste"]
+    selecionadas = st.multiselect("Selecione as regiões a agregar", regioes, default=regioes)
+
+    # 2️⃣ Carrega previsões do GitHub
+    url_fc = (
+        "https://raw.githubusercontent.com/"
+        "abibernardo/modelagem_hierarquica_temporal/"
+        "main/previsoes_brasil.csv"
+    )
+    df_fc = pd.read_csv(url_fc, parse_dates=["forecast_date"])
+
+    # 3️⃣ Mapeamento das colunas
+    col_map = {
+        "Norte": "sarima_norte",
+        "Nordeste": "sarima_nordeste",
+        "Sul": "sarima_sul",
+        "Sudeste/Centro-oeste": "sarima_sudeste_centroeste"
+    }
+
+    # 4️⃣ Soma previsões selecionadas
+    colunas_somar = [col_map[r] for r in selecionadas]
+    df_fc["previsao_agregada"] = df_fc[colunas_somar].sum(axis=1)
+
+    # 5️⃣ Carrega dados reais totais do Brasil
+    url_real = (
+        "https://raw.githubusercontent.com/abibernardo/"
+        "modelagem_hierarquica_temporal/main/"
+        "CARGA_ENERGIA_2025%20(3).csv"
+    )
+    df_real = pd.read_csv(url_real, sep=";", decimal=".")
+    df_real["din_instante"] = pd.to_datetime(df_real["din_instante"])
+
+    df_real = (
+        df_real
+            .groupby("din_instante", as_index=False)["val_cargaenergiamwmed"]
+            .sum()
+            .rename(columns={"din_instante": "data", "val_cargaenergiamwmed": "real_brasil"})
+    )
+
+    # 6️⃣ Merge com previsões
+    df_plot = pd.merge(
+        df_fc[["forecast_date", "previsao_agregada"]],
+        df_real,
+        left_on="forecast_date",
+        right_on="data",
+        how="inner"
+    )
+
+    # 7️⃣ Gráfico
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df_plot["forecast_date"], y=df_plot["previsao_agregada"],
+        mode="lines", name="Soma das Previsões Regionais", line=dict(color="royalblue")
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_plot["forecast_date"], y=df_plot["real_brasil"],
+        mode="lines", name="Valor Real Brasil", line=dict(color="black", dash="dash")
+    ))
+    fig.update_layout(
+        title="Agregação das Previsões Regionais vs Valor Real Brasil (2025)",
+        xaxis_title="Data",
+        yaxis_title="Carga Energética (MW méd)",
+        template="plotly_white",
+        legend=dict(orientation="h", y=-0.2)
+    )
+    fig.update_yaxes(rangemode="tozero")
+
+    st.plotly_chart(fig, use_container_width=True)
