@@ -457,7 +457,7 @@ if sec == "Modelo por Região":
         st.plotly_chart(fig, use_container_width=True)
 
 if sec in "Modelo Hierárquico":
-    st.title("Modelo Hierárquico: Bottom-Up")
+    st.title("Modelo Hierárquico: Ilustração Bottom-Up")
 
     # 1️⃣ Multiselect para regiões
     regioes = ["Norte", "Nordeste", "Sul", "Sudeste/Centro-oeste"]
