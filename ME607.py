@@ -245,7 +245,7 @@ if sec in "Objetivo":
     st.title("Modelagem hierárquica do consumo diário de energia no Brasil")
     st.divider()
     st.subheader("Origem dos dados")
-    st.write("Os dados do consumo diário de energia foram extraídos do site oficial da ONS (Operador Nacional do Sistema Elétrico). O consumo é medido em MWmed, e é dividido por região (consumo diário no Norte, Nordeste, Sul e Sudeste-Centroeste). Foram extraídos os dados para todas as regiões, desde 2027")
+    st.write("Os dados do consumo diário de energia foram extraídos do site oficial da ONS (Operador Nacional do Sistema Elétrico). O consumo é medido em MWmed, e é dividido por região (consumo diário no Norte, Nordeste, Sul e Sudeste-Centroeste). Foram extraídos os dados para todas as regiões, desde 2017")
     st.divider()
     col1, col2 = st.columns(2)
     st.plotly_chart(linha_brasil)
