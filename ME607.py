@@ -97,6 +97,38 @@ linha_nordeste = px.line(
     labels={"din_instante": "Data", "val_cargaenergiamwmed": "Carga Energética (MW médio)", "nom_subsistema": "Região"}
 )
 
+def boxplot_consumo_mensal(df):
+    # Garantir que a coluna de data está no tipo datetime
+    df["din_instante"] = pd.to_datetime(df["din_instante"])
+
+    # Criar coluna com nome do mês (abreviado) e garantir ordenação correta
+    df["mes"] = df["din_instante"].dt.month
+    df["nome_mes"] = df["din_instante"].dt.strftime("%b")
+    ordem_meses = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    df["nome_mes"] = pd.Categorical(df["nome_mes"], categories=ordem_meses, ordered=True)
+
+    # Criar boxplot com Plotly
+    fig = px.box(
+        df,
+        x="nome_mes",
+        y="val_cargaenergiamwmed",
+        points="all",  # mostra todos os pontos no gráfico
+        color="nome_mes",
+        title="Distribuição Mensal do Consumo de Energia",
+        labels={
+            "nome_mes": "Mês",
+            "val_cargaenergiamwmed": "Carga Energética (MW méd)"
+        }
+    )
+
+    fig.update_layout(
+        showlegend=False,
+        template="plotly_white"
+    )
+
+    return st.plotly_chart(fig)
+
 
 # CORRELOGRAMAS
 
@@ -228,18 +260,22 @@ elif sec in "Análise Exploratória":
     if reg_eda in "Norte":
         corr = correlogramas(df_norte)
         st.plotly_chart(linha_norte)
+        boxplot_consumo_mensal(df_norte)
         st.plotly_chart(corr)
     elif reg_eda in "Nordeste":
         corr = correlogramas(df_nordeste)
         st.plotly_chart(linha_nordeste)
+        boxplot_consumo_mensal(df_nordeste)
         st.plotly_chart(corr)
     elif reg_eda in "Sudeste/Centro-oeste":
         corr = correlogramas(df_sudeste_centroeste)
         st.plotly_chart(linha_sudeste_centroeste)
+        boxplot_consumo_mensal(df_sudeste_centroeste)
         st.plotly_chart(corr)
     elif reg_eda in "Sul":
         corr = correlogramas(df_sul)
         st.plotly_chart(linha_sul)
+        boxplot_consumo_mensal(df_sul)
         st.plotly_chart(corr)
 
 
