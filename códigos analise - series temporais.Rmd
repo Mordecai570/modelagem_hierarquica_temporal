@@ -1,0 +1,492 @@
+---
+title: "Untitled"
+author: "Gabriel Victor Soares dos Santos"
+date: "2025-05-14"
+output: html_document
+---
+
+```{r packages, results='hide', message=FALSE, warning=FALSE}
+pacotes <- c("astsa","aTSA","broom","DescTools","dplyr", "fable", "fabletools", "feasts","forecast","fpp3","ggfortify","ggplot2", "gridExtra","hts","lubridate", "MASS","Metrics","plotly", "prophet", "stringr","tsibble","readr","zoo")
+
+pacotes_faltando <- pacotes[!(pacotes %in% installed.packages()[, "Package"])]
+if(length(pacotes_faltando)) install.packages(pacotes_faltando)
+
+# Carrega os pacotes
+lapply(pacotes, library, character.only = TRUE)
+```
+
+```{r data}
+url <- "https://raw.githubusercontent.com/abibernardo/modelagem_hierarquica_temporal/refs/heads/main/dados_me607.csv"
+
+url_dados_2025 <- "https://raw.githubusercontent.com/abibernardo/modelagem_hierarquica_temporal/main/CARGA_ENERGIA_2025%20(3).csv"
+
+
+#df Brasil 2017 - 2024
+df_brasil <- read_csv(url) |> arrange(din_instante)
+
+
+df_brasil <- read.csv("C:/Users/gabri/OneDrive/Área de Trabalho/Faculdade/Materia a fazer/ME607/dados_me607.csv", sep=',')
+
+df_2025 <- read.csv("C:/Users/gabri/OneDrive/Área de Trabalho/Faculdade/Materia a fazer/ME607/dados_2025_me607.csv", sep=';')
+
+df_brasil <- df_brasil[,-1]
+
+
+df_2025 <- read_delim(
+  file = url_dados_2025,
+  delim = ";",
+  locale = locale(decimal_mark = ".")
+)
+
+
+df_total <- bind_rows(df_brasil, df_2025)
+
+df_total <- df_total %>%
+  mutate(
+    din_instante = as.Date(din_instante, format = "%Y-%m-%d")
+  )
+
+df_brasil <- df_total |>
+  group_by(din_instante) |>
+  summarise(val_cargaenergiamwmed = sum(val_cargaenergiamwmed)) 
+
+
+
+
+regioes <- unique(df_total$nom_subsistema)
+dfs_regioes <- lapply(regioes, function(reg) df_total |> filter(nom_subsistema == reg))
+names(dfs_regioes) <- regioes
+df_nordeste <- dfs_regioes[["Nordeste"]]
+df_norte <- dfs_regioes[["Norte"]]
+df_sul <- dfs_regioes[["Sul"]]
+df_sudeste_centroeste <- dfs_regioes[["Sudeste/Centro-Oeste"]]
+
+```
+
+```{r eda, message=FALSE, warning=FALSE}
+df_total$ano <- format(as.Date(df_total$din_instante, '%Y-%m-%d'), "%Y")
+df_total$mes <- format(as.Date(df_total$din_instante, '%Y-%m-%d'), "%m")
+df_total$dia_nome <- format(as.Date(df_total$din_instante, '%Y-%m-%d'), "%a")
+df_total$dia_numero <- format(as.Date(df_total$din_instante, '%Y-%m-%d'), "%d")
+
+
+df_total %>% group_by(din_instante) %>% 
+  summarise(obs = sum(val_cargaenergiamwmed)) %>%
+  ggplot(aes(x=din_instante, y=obs)) + 
+  geom_line(linewidth=0.8) + 
+  labs(title = "Consumo Médio Diário de Energia em MegaWatts no Brasil", x="Ano", y="Carga Energia") +
+  theme_bw()
+
+
+df_total %>% group_by(ano,mes) %>% 
+  summarise(obs = sum(val_cargaenergiamwmed)) %>%
+  ggplot(aes(x=mes, y=obs ,group = ano, colour = ano)) + 
+  geom_line(linewidth=0.8) + 
+  labs(title = "Consumo Médio Diário de Energia por Ano ", x="Mês", y="Carga Energia", colour = "Ano") +
+  theme_bw()
+
+df_total %>% group_by(dia_numero, mes) %>% 
+  summarise(obs = sum(val_cargaenergiamwmed)) %>% 
+  ggplot(aes(x= dia_numero, y=obs, fill= dia_numero, colour = dia_numero)) + 
+  geom_violin() + 
+  theme_bw() +
+   theme(legend.position="none")+
+  labs(title = "Consumo de Energia por Dia", y="Carga de Energia", x="Dia", coulor="")
+
+df_total %>% 
+  ggplot(aes(x = din_instante, y = val_cargaenergiamwmed, group = nom_subsistema, colour = nom_subsistema)) +
+  geom_line() +
+  labs(title = "Consumo Médio Diário de Energia por Região ", x="Ano", y="Carga Energia", colour = "Região") +
+  theme_bw()
+```
+
+```{r decomposicao_br}
+serie_brasil <- ts(df_total$val_cargaenergiamwmed, frequency = 365)
+
+decomposicao_multi <- decompose(serie_brasil, type = "additive")
+autoplot(decomposicao_multi)
+
+## ACF e PACF
+
+PlotACF(df_total$val_cargaenergiamwmed, lag.max=30, main = 'Gráfico de ACF e PACF da série temporal')
+
+#teste de estacionariedade
+
+adf.test(df_total$val_cargaenergiamwmed)
+```
+
+```{r estacionariedade}
+carga_diff <- append(53615.08,diff(df_brasil$val_cargaenergiamwmed))
+df_brasil$carga_diff <- carga_diff
+
+df_brasil$carga_diff <- as.numeric(df_brasil$carga_diff)
+
+
+#problema
+PlotACF(df_brasil$carga_diff, main = 'Gráfico de ACF e PACF da série diferenciada')
+
+```
+
+```{r cross_validation,  message=FALSE, warning=FALSE}
+
+# organizacao dos dados e rolling window
+
+df_brasil_ts <- df_brasil %>% as_tsibble(index = din_instante)
+
+serie_zoo <- zoo(df_brasil_ts$carga_diff, order.by = df_brasil_ts$din_instante)
+
+
+h <- 1
+num_rolling <- 90
+window_length <- 365
+last_est_date <- as.Date("2024-09-01")
+end_index <- which(index(serie_zoo) == last_est_date)
+start_index <- end_index - window_length + 1
+
+results_rolling <- data.frame(
+  step = 1:num_rolling,
+  est_start = as.Date(NA),
+  est_end = as.Date(NA),
+  forecast_target = as.Date(NA),
+  forecast_value_sarima = NA,
+  forecast_value_hw = NA,
+  forecast_value_rwf = NA,
+  forecast_value_snaive = NA,
+  forecast_value_naive = NA,
+  forecast_value_ar = NA,
+  forecast_value_ma = NA,
+  forecast_value_arma = NA,
+  forecast_value_arima = NA,
+  actual_value = NA)
+
+
+
+
+
+# Rolling forecast
+for (i in 0:(num_rolling - 1)) {
+  est_start_index <- start_index + i
+  est_end_index <- est_start_index + window_length - 1
+  forecast_index <- est_end_index + h
+  
+  if (forecast_index > length(serie_zoo )) break
+  
+  est_start_date <- index(serie_zoo )[est_start_index]
+  est_end_date <- index(serie_zoo )[est_end_index]
+  forecast_target_date <- index(serie_zoo )[forecast_index]
+
+  # Extract training data
+  train_series <- window(serie_zoo , start = est_start_date, end = est_end_date)
+  train_ts <- ts(as.numeric(train_series), start = c(2023, 9), frequency = 7)
+  
+  
+  # Fits
+  snaive <- snaive(train_ts)
+  rwf <- rwf(train_ts,h=h)
+  holt_winters <- hw(train_ts)
+  sarima <-  auto.arima(train_ts, seasonal = TRUE) 
+  ar_model <- Arima(train_ts, order = c(1, 0, 0))
+  ma_model <- Arima(train_ts, order = c(0, 0, 1))
+  arma <- Arima(train_ts, order = c(2,0,2))
+  arima <- Arima(train_ts, order = c(1,1,1))
+  naive <- naive(train_ts)
+  
+  fc_holt <- forecast(holt_winters, h = h)
+  fc_sarima <- forecast(sarima, h = h)
+  fc_snaive <- forecast(snaive, h=h)
+  fc_naive <- naive$mean
+  fc_rwf <- forecast(rwf, h=h)
+  fc_ar <- forecast(ar_model, h=h)
+  fc_ma <- forecast(ma_model, h=h)
+  fc_arma <- forecast(arma, h=h)
+  fc_arima <- forecast(arima, h=h)
+  
+  forecast_value_sarima <- fc_sarima$mean[h]
+  forecast_value_hw <- fc_holt$mean[h]
+  forecast_value_rwf = fc_rwf$mean[h]
+  forecast_value_snaive <- fc_snaive$mean[h]
+  forecast_value_naive <- fc_naive
+  forecast_value_ar <- fc_ar$mean[h]
+  forecast_value_ma <- fc_ma$mean[h]
+  forecast_value_arma <- fc_arma$mean[h]
+  forecast_value_arima <- fc_arima$mean[h]
+  actual_value <- as.numeric(serie_zoo[forecast_index])
+  
+  results_rolling[i + 1, ] <- list(
+    step = i + 1,
+    est_start = est_start_date,
+    est_end = est_end_date,
+    forecast_target = forecast_target_date,
+    forecast_value_sarima = forecast_value_sarima,
+    forecast_value_hw = forecast_value_hw,
+    forecast_value_rwf = forecast_value_rwf,
+    forecast_value_snaive = forecast_value_snaive,
+    forecast_value_naive = forecast_value_naive,
+    forecast_value_ar = forecast_value_ar,
+    forecast_value_ma = forecast_value_ma,
+    forecast_value_arma = forecast_value_arma,
+    forecast_value_arima = forecast_value_arima,
+    actual_value = actual_value)
+}
+
+
+```
+
+```{r tabela_avaliacoes}
+
+results <- results_rolling
+
+results <- results[,-c(1:3)]
+
+for (i in index(results)[forecast_index]){
+  rmse <- c(sqrt(sum((results$forecast_value_rwf-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_snaive-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_naive-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_ar-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_ma-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_arma-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_arima-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_sarima-results$actual_value)^2/length(results$forecast_target))),
+                  sqrt(sum((results$forecast_value_hw-results$actual_value)^2/length(results$forecast_target)))
+)
+  mae <- c(sum(abs((results$forecast_value_rwf-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_snaive-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_naive-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_ar-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_ma-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_arma-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_arima-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_sarima-results$actual_value))/length(results$forecast_target)),
+                  sum(abs((results$forecast_value_hw-results$actual_value))/length(results$forecast_target))
+)
+  mape  <- c( (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_rwf)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_snaive)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_naive)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_ar)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_ma)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_arma)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_arima)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_sarima)/results$actual_value)),
+              (1/length(results$forecast_target))*sum(abs((results$actual_value-results$forecast_value_hw)/results$actual_value))
+)
+}
+
+aic <- c(0,0,0,AIC(ar_model),AIC(ma_model), AIC(arma), AIC(arima), AIC(sarima), AIC(holt_winters$model))
+                  
+bic <- c(0,0,0,BIC(ar_model),BIC(ma_model), BIC(arma), BIC(arima), BIC(sarima), BIC(holt_winters$model))
+
+models <- c("RWF","Snaive","Naive","AR","MA","ARMA","ARIMA","SARIMA","Holt Winters")
+
+
+metrics <- data.frame(models, aic,bic,rmse,mae,mape)
+metrics
+
+
+```
+
+```{r analise_residuos}
+
+analisar_residuos <- function(residuos_df, titulo = "") {
+  p1 <- ggplot(residuos_df, aes(x = data, y = residuo)) +
+    geom_line() + geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(title = paste(titulo, "- Resíduos no tempo"), x = "Data", y = "Resíduo")
+  p2 <- ggplot(residuos_df, aes(x = residuo)) +
+    geom_histogram(bins = 30) +
+    labs(title = paste(titulo, "- Histograma dos resíduos"), x = "Resíduo", y = "Frequência")
+  p3 <- autoplot(Acf(residuos_df$residuo, plot = FALSE)) +
+    labs(title = paste(titulo, "- ACF dos resíduos"))
+  grid.arrange(p1, p2, p3, ncol = 1)
+}
+
+ajustar_ets <- function(df_regiao) {
+  df_ts <- df_regiao %>% mutate(din_instante = as.Date(din_instante)) %>%
+    arrange(din_instante) %>% as_tsibble(index = din_instante)
+  modelo <- df_ts %>% model(ETS = ETS(carga_diff ~ error("A") + trend("Ad") + season("A")))
+  print(report(modelo))
+  fc <- forecast(modelo, h = 30)
+  print(autoplot(fc, df_ts) + labs(title = "ETS Previsão", y = "MW médios", x = "Data"))
+  # resíduos
+  res <- modelo %>% augment() %>% select(din_instante, .innov) %>%
+    rename(data = din_instante, residuo = .innov)
+  analisar_residuos(res, titulo = "ETS")
+}
+
+
+ajustar_sarima <- function(df_regiao) {
+  df_ts <- df_regiao %>% mutate(din_instante = as.Date(din_instante)) %>%
+    as_tsibble(index = din_instante)
+  modelo <- df_ts %>%
+    model(SARIMA = ARIMA(carga_diff ~ pdq(0:2,0:1,0:2) + PDQ(0:2,0:1,0:2)))
+  print(report(modelo))
+  fc <- forecast(modelo, h = 30)
+  print(autoplot(fc, df_ts) + labs(title = "SARIMA Previsão", y = "MW médios", x = "Data"))
+  # resíduos
+  res <- modelo %>% augment() %>% select(din_instante, .innov) %>%
+    rename(data = din_instante, residuo = .innov)
+  analisar_residuos(res, titulo = "SARIMA")
+}
+
+ajustar_sarima(df_brasil)
+
+Box.test(sarima$x, type="Ljung")
+
+ajustar_ets(df_brasil)
+
+Box.test(holt_winters, type="Ljung")
+Box.test(sarima$x, type="Ljung")
+
+```
+
+```{r modelo_descartado}
+
+ajustar_arma <- function(df_regiao) {
+  df_ts <- df_regiao %>% mutate(din_instante = as.Date(din_instante)) %>%
+    arrange(din_instante) %>% as_tsibble(index = din_instante)
+  modelo <- df_ts %>% model(ARMA = ARIMA(carga_diff ~ pdq(1,0,1)+ PDQ(0,0,0)))
+  print(report(modelo))
+  fc <- forecast(modelo, h = 30)
+  print(autoplot(fc, df_ts) + labs(title = "ARMA Previsão", y = "MW médios", x = "Data"))
+  # resíduos
+  res <- modelo %>% augment() %>% select(din_instante, .innov) %>%
+    rename(data = din_instante, residuo = .innov)
+  analisar_residuos(res, titulo = "ARMA")
+}
+
+
+ajustar_arma(df_brasil)
+
+Box.test(snaive, type="Ljung", lag=14)
+```
+
+```{r}
+ggplot(results_rolling, aes(x=forecast_target,y=actual_value))+
+  geom_line()+
+  geom_line(aes(y=forecast_value_hw, color="Holt"), size=1, linetype = "dashed") +
+  geom_line(aes(y=forecast_value_snaive, color="SNaive"), size=1, linetype = "dashed") +
+ geom_line(aes(y=forecast_value_sarima, color="Sarima"),size=1,linetype = "dashed")+
+  labs(title = "Consumo Médio Diário de Energia por Região ", x="Ano", y="Carga Energia", colour = "Modelo")+ theme_bw()
+
+
+ggplot(results_rolling, aes(x=forecast_target,y=actual_value))+
+  geom_line()+
+  geom_line(aes(y=forecast_value_arma, color="ARMA(1,1)"), size=1, linetype = "dashed") +
+  labs(title = "Consumo Médio Diário de Energia por Região ", x="Ano", y="Carga Energia", colour = "Modelo")+ theme_bw()
+```
+
+
+```{r c_v_original}
+
+df_p <- df_brasil %>%
+  transmute(ds = as.Date(din_instante), y = val_cargaenergiamwmed)
+
+df_brasil_ts <- df_brasil %>% as_tsibble(index = din_instante)
+
+serie_zoo2 <- zoo(df_brasil_ts$val_cargaenergiamwmed, order.by = df_brasil_ts$din_instante)
+
+
+h <- 1
+num_rolling <- 90
+window_length <- 365
+last_est_date <- as.Date("2024-09-01")
+end_index <- which(index(serie_zoo2) == last_est_date)
+start_index <- end_index - window_length + 1
+
+predictions <- data.frame(
+  step = 1:num_rolling,
+  est_start = as.Date(NA),
+  est_end = as.Date(NA),
+  forecast_target = as.Date(NA),
+  forecast_value_sarima = NA,
+  forecast_value_hw = NA,
+  forecast_value_prophet = NA,
+  actual_value = NA)
+
+
+
+# Rolling forecast
+for (i in 0:(num_rolling - 1)) {
+  est_start_index <- start_index + i
+  est_end_index <- est_start_index + window_length - 1
+  forecast_index <- est_end_index + h
+  
+  if (forecast_index > length(serie_zoo2 )) break
+  
+  est_start_date <- index(serie_zoo2 )[est_start_index]
+  est_end_date <- index(serie_zoo2 )[est_end_index]
+  forecast_target_date <- index(serie_zoo2 )[forecast_index]
+
+  # Extract training data
+  train_series <- window(serie_zoo2 , start = est_start_date, end = est_end_date)
+  train_ts <- ts(as.numeric(train_series), start = c(2023, 9), frequency = 7)
+  
+  
+  # Fits
+  holt_winters <- hw(train_ts)
+  sarima2 <-  auto.arima(train_ts, seasonal = TRUE) 
+  prophet <- prophet(df_p, yearly.seasonality = TRUE, weekly.seasonality = FALSE, daily.seasonality = FALSE)
+  
+  
+  fc_holt <- forecast(holt_winters, h = h)
+  fc_sarima <- forecast(sarima, h = h)
+  future <- make_future_dataframe(prophet, periods = h)
+  fc_prophet <- predict(prophet, future) %>% mutate(ds = as.Date(ds))
+  
+  forecast_value_sarima <- fc_sarima$mean[h]
+  forecast_value_hw <- fc_holt$mean[h]
+  forecast_value_prophet <- fc_prophet$yhat[forecast_index]
+  actual_value <- as.numeric(serie_zoo2[forecast_index])
+  
+  predictions[i + 1, ] <- list(
+    step = i + 1,
+    est_start = est_start_date,
+    est_end = est_end_date,
+    forecast_target = forecast_target_date,
+    forecast_value_sarima = forecast_value_sarima,
+    forecast_value_hw = forecast_value_hw,
+    forecast_value_prophet = forecast_value_prophet,
+    actual_value = actual_value)
+}
+
+results2 <- predictions
+
+results2 <- results2[,-c(1:3)]
+
+for (i in index(results2)[forecast_index]){
+  rmse2<- c(sqrt(sum((results2$forecast_value_sarima-results2$actual_value)^2/length(results2$forecast_target))),
+                  sqrt(sum((results2$forecast_value_hw-results2$actual_value)^2/length(results2$forecast_target))),
+                  sqrt(sum((results2$forecast_value_prophet-results2$actual_value)^2/length(results2$forecast_target)))
+            )
+  
+   mae2 <- c(sum(abs((results2$forecast_value_sarima-results2$actual_value))/length(results2$forecast_target)),
+             
+                  sum(abs((results2$forecast_value_hw-results2$actual_value))/length(results2$forecast_target)),
+             
+                  sum(abs((results2$forecast_value_prophet-results2$actual_value))/length(results2$forecast_target))
+             )
+   
+   mape2  <- c( (1/length(results2$forecast_target))*sum(abs((results2$actual_value-results2$forecast_value_sarima)/results2$actual_value)),
+                
+              (1/length(results2$forecast_target))*sum(abs((results2$actual_value-results2$forecast_value_hw)/results2$actual_value)),
+              
+              (1/length(results2$forecast_target))*sum(abs((results2$actual_value-results2$forecast_value_prophet)/results2$actual_value))
+              )
+}
+
+models2 <- c("Sarima","Holt Winters", "Prophet")
+
+metricas <- data.frame(models2, rmse2,mae2,mape2)
+metricas
+
+
+ggplot(predictions, aes(x=forecast_target,y=actual_value))+
+  geom_line()+
+  geom_line(aes(y=forecast_value_hw, color="Holt"), size=1, linetype = "dashed") +
+  geom_line(aes(y=forecast_value_prophet, color="Prophet"), size=1, linetype = "dashed") +
+ geom_line(aes(y=forecast_value_sarima, color="Sarima"),size=1,linetype = "dashed")+
+  labs(title = "Consumo Médio Diário de Energia por Região ", x="Ano", y="Carga Energia", colour = "Modelo")+ theme_bw()
+
+
+
+```
+
+
